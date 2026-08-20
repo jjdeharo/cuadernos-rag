@@ -25,6 +25,22 @@ El primero, `ia-educacion`, reúne las 15 fuentes de un cuaderno sobre uso
 
 Nada sale de tu máquina: los dos modelos corren en CPU sobre onnxruntime.
 
+## Instalación
+
+Necesitas Python 3.11 o superior y unos 4 GB libres (3,2 GB son los dos
+modelos, que se descargan solos la primera vez).
+
+```bash
+git clone https://github.com/jjdeharo/cuadernos-rag.git
+cd cuadernos-rag
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+```
+
+Ya está: el corpus `ia-educacion` viene con su índice construido, así que
+**no hace falta indexar nada** para empezar a preguntar. La primera consulta
+tarda unos minutos mientras se descargan los modelos; las siguientes, segundos.
+
 ## Uso
 
 ```bash
@@ -39,9 +55,7 @@ servidor MCP declarado en `.mcp.json` se registra solo y `CLAUDE.md` le indica
 cómo citar. Registro manual en otro sitio:
 
 ```bash
-claude mcp add ia-educacion -- \
-  /home/jjdeharo/Documentos/github/rag/.venv/bin/python \
-  /home/jjdeharo/Documentos/github/rag/src/mcp_server.py
+claude mcp add ia-educacion -- "$PWD/.venv/bin/python" "$PWD/src/mcp_server.py"
 ```
 
 ## Actualizar el corpus
@@ -66,7 +80,7 @@ Los programas, el entorno de Python y los modelos son compartidos. Cada RAG es
 solo sus documentos y su índice, bajo `corpus/`:
 
 ```
-rag/
+cuadernos-rag/
 ├── src/  .venv/  models/        el motor, una sola vez
 └── corpus/
     └── ia-educacion/
