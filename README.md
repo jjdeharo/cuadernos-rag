@@ -137,3 +137,22 @@ type: pdf
 
 Para PDFs que no vengan de NotebookLM: `pip install pymupdf4llm` y conviértelos
 a Markdown antes de dejarlos en `docs/`.
+
+## Licencia
+
+| Qué | Licencia |
+|---|---|
+| El código (`src/`) | [AGPL-3.0](LICENSE) |
+| El texto propio (README, FUENTES, prompt) | [CC BY-SA 4.0](LICENSE-DOCS.md) |
+| Los documentos del corpus | Cada uno el suyo — ver [FUENTES.md](FUENTES.md) |
+
+Los documentos del corpus son obra de terceros y no se relicencian aquí. Dos de
+ellos llevan cláusula NoComercial, así que el corpus **en conjunto** no puede
+reutilizarse con fines comerciales; el código sí.
+
+## Autoría
+
+Juan José de Haro — [educacion.bilateria.org](https://educacion.bilateria.org) ·
+[github.com/jjdeharo](https://github.com/jjdeharo)
+
+Si le das uso en tu centro o en formación del profesorado, me alegra saberlo.

@@ -1,3 +1,7 @@
+# cuadernos-rag — Copyright (C) 2026 Juan José de Haro
+# Software libre bajo licencia AGPL-3.0-or-later; ver el fichero LICENSE.
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Servidor MCP: expone el corpus a Claude Code / Codex CLI como herramientas.
 
 Registro en Claude Code:

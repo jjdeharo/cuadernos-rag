@@ -1,3 +1,7 @@
+# cuadernos-rag — Copyright (C) 2026 Juan José de Haro
+# Software libre bajo licencia AGPL-3.0-or-later; ver el fichero LICENSE.
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Convierte documentos propios a Markdown y los deja en docs/.
 
     python src/importar.py informe.pdf apuntes.txt ~/tesis/*.pdf
