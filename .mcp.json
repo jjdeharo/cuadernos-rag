@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "ia-educacion": {
+      "command": "/home/jjdeharo/Documentos/github/rag/.venv/bin/python",
+      "args": ["/home/jjdeharo/Documentos/github/rag/src/mcp_server.py"]
+    }
+  }
+}

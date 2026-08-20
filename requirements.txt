@@ -1,0 +1,9 @@
+fastembed==0.8.0
+huggingface_hub==1.28.0
+mcp==2.0.0
+mcp-types==2.0.0
+numpy==2.4.6
+onnxruntime==1.29.0
+pymupdf4llm==1.28.2
+sqlite-vec==0.1.9
+tokenizers==0.23.1
