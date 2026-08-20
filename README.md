@@ -7,6 +7,7 @@ ninguna API externa. Un motor compartido y tantos corpus como quieras bajo
 El primero, `ia-educacion`, reúne las 15 fuentes de un cuaderno sobre uso
 ético, legal y responsable de la IA en educación: 3,2 M de caracteres,
 1.910 pasajes indexados.
+Su procedencia y licencia están en [FUENTES.md](FUENTES.md).
 
 ## Qué hace
 
