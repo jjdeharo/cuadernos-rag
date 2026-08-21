@@ -57,7 +57,7 @@ LEGAL_RE = re.compile(
     r"(?:CAPÍTULO|TÍTULO|SECCIÓN|ANEXO|LIBRO|PARTE)\s+[IVXLC\d]+"
     r"|Artículo\s+\d+\s*(?:bis|ter|quater)?"
     r"|Disposición\s+\w+\s+\w+"
-    r")\s*$",
+    r")(?:\.\s*|\s*$)(.*)$",
     re.IGNORECASE,
 )
 # Encabezados numerados de guías e informes ("2.2. Perfil del docente").
@@ -115,7 +115,27 @@ def find_sections(body: str) -> list[tuple[int, str]]:
     """
     lineas = body.splitlines(keepends=True)
     # Si el documento es articulado, sus apartados numerados no son secciones.
-    articulado = sum(bool(LEGAL_RE.match(l.strip())) for l in lineas) >= 10
+    def es_url(texto: str) -> bool:
+        return bool(re.match(r"(?:https?://|www\.)", texto.strip(), re.I))
+
+    def encabezado_legal(linea: str, siguiente: str = ""):
+        m = LEGAL_RE.match(linea.strip())
+        if not m:
+            return None
+        # Los índices de los PDF repiten los artículos con líderes de puntos.
+        # No son el comienzo real de una sección.
+        if (
+            re.search(r"(?:\.\s*){3,}", m.group(2))
+            or re.search(r"\.\s+\d+\s*$", m.group(2))
+            or es_url(siguiente)
+        ):
+            return None
+        return m
+
+    articulado = sum(
+        bool(encabezado_legal(l, lineas[i + 1] if i + 1 < len(lineas) else ""))
+        for i, l in enumerate(lineas)
+    ) >= 10
     patrones = [LEGAL_RE] if articulado else [LEGAL_RE, NUM_RE]
 
     offsets, pos = [], 0
@@ -125,17 +145,30 @@ def find_sections(body: str) -> list[tuple[int, str]]:
 
     out: list[tuple[int, str]] = []
     for i, line in enumerate(lineas):
-        m = next((p.match(line.strip()) for p in patrones if p.match(line.strip())), None)
+        siguiente = lineas[i + 1].strip() if i + 1 < len(lineas) else ""
+        m = encabezado_legal(line, siguiente) if LEGAL_RE in patrones else None
+        if not m and NUM_RE in patrones:
+            m = NUM_RE.match(line.strip())
         if not m:
             continue
         nombre = " ".join(m.group(1).split())
-        if re.match(r"^(Artículo|CAPÍTULO|TÍTULO|SECCIÓN|ANEXO)\b", nombre, re.I):
-            siguiente = lineas[i + 1].strip() if i + 1 < len(lineas) else ""
+        rubrica_inline = ""
+        if m.re is LEGAL_RE:
+            rubrica_inline = m.group(2).strip()
+            # Algunos PDF dejan el primer apartado en la misma línea que la
+            # rúbrica: «Artículo 7. Título. 1. Texto…».
+            rubrica_inline = rubrica_inline.split(". ", maxsplit=1)[0].rstrip(" .")
+            if len(rubrica_inline) > 180:
+                rubrica_inline = ""
+        if rubrica_inline:
+            nombre = f"{nombre} — {rubrica_inline}"
+        elif re.match(r"^(Artículo|CAPÍTULO|TÍTULO|SECCIÓN|ANEXO)\b", nombre, re.I):
             es_rubrica = (
                 0 < len(siguiente) <= 130
                 and not LEGAL_RE.match(siguiente)
                 and not siguiente[0].isdigit()
                 and not siguiente.endswith(".")
+                and not es_url(siguiente)
             )
             if es_rubrica:
                 nombre = f"{nombre} — {siguiente}"

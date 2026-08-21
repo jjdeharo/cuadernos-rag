@@ -110,9 +110,13 @@ def listar_corpus() -> str:
     todos = rag.list_corpus()
     if not todos:
         return "No hay ningún corpus."
-    return "\n".join(
-        f"- {c.name}: {c.title} ({c.stats()['chunks']} pasajes)" for c in todos
-    )
+    lineas = []
+    for c in todos:
+        try:
+            lineas.append(f"- {c.name}: {c.title} ({c.stats()['chunks']} pasajes)")
+        except (OSError, ValueError, sqlite3.Error):
+            lineas.append(f"- {c.name}: índice no utilizable")
+    return "\n".join(lineas)
 
 
 @mcp.tool()

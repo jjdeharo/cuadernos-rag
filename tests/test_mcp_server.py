@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -11,6 +12,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 import mcp_server
 import rag
+import index as indexador
 
 
 class MCPServerToolsTest(unittest.TestCase):
@@ -143,6 +145,82 @@ class TitulosTest(unittest.TestCase):
             "Guía INTEF 2024",
         )
         self.assertEqual(rag.titulo_legible("", "guia"), "guia")
+
+
+class SeccionesLegalesTest(unittest.TestCase):
+
+    def test_articulo_y_rubrica_en_la_misma_linea(self):
+        secciones = rag.find_sections("\n".join(
+            f"Artículo {n}.  Título del artículo {n}. 1. Contenido suficiente."
+            for n in range(1, 13)
+        ))
+        self.assertEqual(len(secciones), 12)
+        self.assertEqual(secciones[6][1], "Artículo 7 — Título del artículo 7")
+
+    def test_ignora_entradas_del_indice(self):
+        cuerpo = "\n".join(
+            [f"Artículo {n}. Título. . . . . {n + 10}" for n in range(1, 13)]
+            + [f"Artículo {n}. Título real {n}. 1. Texto." for n in range(1, 13)]
+        )
+        secciones = rag.find_sections(cuerpo)
+        self.assertEqual(len(secciones), 12)
+        self.assertTrue(all("real" in nombre for _, nombre in secciones))
+
+    def test_no_usa_una_url_como_rubrica(self):
+        cuerpo = "\n".join(
+            sum(([f"Artículo {n}", f"https://example.test/a{n}", "Texto"]
+                 for n in range(1, 13)), [])
+            + [f"Artículo {n}. Título real {n}. 1. Texto."
+               for n in range(1, 13)]
+        )
+        secciones = rag.find_sections(cuerpo)
+        self.assertEqual(len(secciones), 12)
+        self.assertTrue(all("http" not in nombre for _, nombre in secciones))
+
+
+class CorpusDanadoTest(unittest.TestCase):
+
+    def test_listar_corpus_no_falla_por_un_indice_incompleto(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "roto"
+            (base / "docs").mkdir(parents=True)
+            (base / "data").mkdir()
+            (base / "data" / "index.db").touch()
+            with mock.patch.object(rag, "CORPUS_DIR", Path(tmp)):
+                resultado = mcp_server.listar_corpus()
+        self.assertIn("roto: índice no utilizable", resultado)
+
+
+class IndexadoIncrementalTest(unittest.TestCase):
+
+    def test_un_documento_que_queda_vacio_retira_los_pasajes_antiguos(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            fichero = base / "docs" / "fuente.md"
+            fichero.parent.mkdir()
+            fichero.write_text("", encoding="utf-8")
+            db = rag.connect(base / "index.db")
+            rag.create_schema(db)
+            db.execute(
+                "INSERT INTO chunks(doc_slug, doc_title, text) VALUES (?,?,?)",
+                ("fuente", "Fuente", "contenido antiguo"),
+            )
+            db.execute(
+                "INSERT INTO documents(slug, title, hash, n_chunks)"
+                " VALUES (?,?,?,1)",
+                ("fuente", "Fuente", "hash-antiguo"),
+            )
+            db.commit()
+            indexador.indexar(db, [fichero])
+            pasajes = db.execute(
+                "SELECT COUNT(*) FROM chunks WHERE doc_slug = 'fuente'"
+            ).fetchone()[0]
+            registrado = db.execute(
+                "SELECT n_chunks FROM documents WHERE slug = 'fuente'"
+            ).fetchone()[0]
+            db.close()
+        self.assertEqual(pasajes, 0)
+        self.assertEqual(registrado, 0)
 
 
 if __name__ == "__main__":

@@ -42,7 +42,18 @@ def indexar(db, ficheros: list[Path]) -> int:
     for n_doc, f in enumerate(ficheros, 1):
         chunks = rag.chunk_document(f)
         if not chunks:
-            print(f"  [{n_doc}/{len(ficheros)}] {f.stem}: vacío, omitido")
+            # Si antes tenía contenido, no podemos dejar sus pasajes antiguos
+            # respondiendo búsquedas. Registrarlo con cero pasajes evita además
+            # intentar reindexarlo en cada ejecución.
+            rag.drop_document(db, f.stem)
+            meta, _ = rag.parse_doc(f)
+            db.execute(
+                "INSERT INTO documents(slug, title, hash, n_chunks)"
+                " VALUES (?,?,?,0)",
+                (f.stem, meta.get("title", f.stem), rag.doc_hash(f)),
+            )
+            db.commit()
+            print(f"  [{n_doc}/{len(ficheros)}] {f.stem}: vacío, retirado del índice")
             continue
         rag.drop_document(db, f.stem)  # por si es una reindexación
         cur = db.executemany(
@@ -62,6 +73,15 @@ def indexar(db, ficheros: list[Path]) -> int:
             "INSERT INTO chunks_vec(chunk_id, embedding) VALUES (?,?)",
             [(i, sqlite_vec.serialize_float32(v)) for i, v in zip(ids, vectores)],
         )
+        con_vector = db.execute(
+            "SELECT COUNT(*) FROM chunks c JOIN chunks_vec v ON v.chunk_id = c.id"
+            " WHERE c.doc_slug = ?", (f.stem,)
+        ).fetchone()[0]
+        if con_vector != len(chunks):
+            raise RuntimeError(
+                f"Índice vectorial incompleto para {f.stem}: "
+                f"{con_vector}/{len(chunks)}"
+            )
         db.execute(
             "INSERT OR REPLACE INTO documents(slug, title, hash, n_chunks)"
             " VALUES (?,?,?,?)",
@@ -132,6 +152,10 @@ def main() -> None:
         return
 
     if not (nuevos or modificados or borrados):
+        # También repara una interrupción ocurrida después de confirmar los
+        # documentos y antes de reconstruir el índice léxico.
+        db.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')")
+        db.commit()
         s = rag.stats(db)
         print(f"Sin cambios. {s['chunks']} pasajes indexados.")
         return
