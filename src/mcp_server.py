@@ -10,7 +10,6 @@ Registro en Claude Code:
 import functools
 import sqlite3
 import sys
-import threading
 from pathlib import Path
 from typing import Annotated
 
@@ -209,23 +208,10 @@ def leer_documento(
     return f"# {ruta.stem} (caracteres {desde}-{fin})\n\n{trozo}{cola}"
 
 
-def precargar_modelos() -> None:
-    """Carga los dos modelos en cuanto arranca el servidor, en segundo plano.
-
-    Cargarlos cuesta unos 15 segundos y, si se espera a la primera búsqueda,
-    esos segundos se los come esa llamada. Hacerlo aquí no bloquea el
-    handshake: cuando llegue la primera consulta lo normal es que ya estén.
-    """
-    def cargar():
-        try:
-            rag.embedder()
-            rag.reranker()
-        except Exception as e:                      # pragma: no cover
-            print(f"No se pudieron precargar los modelos: {e}", file=sys.stderr)
-
-    threading.Thread(target=cargar, daemon=True).start()
-
-
 if __name__ == "__main__":
-    precargar_modelos()
+    # Los modelos no se cargan al arrancar, sino en la primera búsqueda: un
+    # servidor recién conectado que nadie consulta ocupa ~30 MB en vez de 3,3 GB,
+    # y hay un proceso de estos por cada cliente MCP abierto. El vigilante los
+    # vuelve a soltar cuando pasan unos minutos sin usarse.
+    rag.vigilar_inactividad()
     mcp.run()

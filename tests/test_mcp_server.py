@@ -223,5 +223,49 @@ class IndexadoIncrementalTest(unittest.TestCase):
         self.assertEqual(registrado, 0)
 
 
+class LiberarModelosTest(unittest.TestCase):
+    """El servidor suelta los modelos que llevan un rato sin usarse."""
+
+    def setUp(self):
+        rag._MODELOS.clear()
+        rag._USO.clear()
+        self.addCleanup(rag._MODELOS.clear)
+        self.addCleanup(rag._USO.clear)
+
+    def test_modelo_se_cachea_y_marca_el_uso(self):
+        construir = mock.Mock(side_effect=lambda: object())
+        primero = rag._modelo("falso", construir)
+        segundo = rag._modelo("falso", construir)
+        self.assertIs(primero, segundo)
+        construir.assert_called_once()
+        self.assertIn("falso", rag._USO)
+
+    def test_libera_solo_lo_caducado(self):
+        rag._modelo("viejo", object)
+        rag._modelo("nuevo", object)
+        rag._USO["viejo"] -= 3600
+        self.assertEqual(rag.liberar_modelos(ttl=600), ["viejo"])
+        self.assertEqual(list(rag._MODELOS), ["nuevo"])
+
+    def test_tras_liberar_se_vuelve_a_construir(self):
+        construir = mock.Mock(side_effect=lambda: object())
+        rag._modelo("falso", construir)
+        rag.liberar_modelos(ttl=0)
+        rag._modelo("falso", construir)
+        self.assertEqual(construir.call_count, 2)
+
+    def test_la_arena_llega_a_los_modelos(self):
+        with mock.patch("fastembed.TextEmbedding") as constructor, \
+             mock.patch.object(rag, "MEM_ARENA", False):
+            rag.embedder()
+        self.assertIs(
+            constructor.call_args.kwargs["enable_cpu_mem_arena"], False)
+
+    def test_ttl_cero_no_arranca_vigilante(self):
+        with mock.patch.object(rag.threading, "Thread") as hilo:
+            rag.vigilar_inactividad(ttl=0)
+            hilo.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

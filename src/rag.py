@@ -5,12 +5,15 @@
 """Núcleo del RAG: chunking, indexado y búsqueda híbrida."""
 from __future__ import annotations
 
+import ctypes
+import gc
 import hashlib
 import json
 import os
 import re
 import sqlite3
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -350,11 +353,25 @@ def drop_document(db: sqlite3.Connection, slug: str) -> int:
 
 
 # Los modelos ocupan más de un giga cada uno y lru_cache no es atómica: sin
-# candado, precargarlos en segundo plano mientras entra una consulta cargaría
-# dos copias del mismo modelo. Doble comprobación: el candado sólo estorba
-# durante la carga inicial, no en cada búsqueda.
+# candado, cargarlos desde dos hebras a la vez dejaría dos copias del mismo
+# modelo en memoria. Doble comprobación: el candado sólo estorba durante la
+# carga inicial, no en cada búsqueda.
 _MODELOS: dict[str, object] = {}
+_USO: dict[str, float] = {}
 _CANDADO_MODELOS = threading.Lock()
+
+# El embedder ocupa 1,5 GB y el reranker otros 1,8 GB, y hay un proceso del
+# servidor por cada cliente MCP conectado. Un servidor que pasa el día en
+# espera no tiene por qué sostener 3,3 GB: pasado este tiempo sin usarlos los
+# soltamos y el proceso vuelve a ~30 MB. Recargarlos cuesta unos 15 s; con 0
+# se quedan cargados para siempre.
+MODEL_TTL = float(os.environ.get("RAG_MODEL_TTL", 600))
+
+# onnxruntime reserva una "arena" de memoria de trabajo y la conserva entre
+# llamadas: gana un par de segundos por búsqueda a cambio de que el proceso se
+# asiente en unos 6 GB mientras se usa, en vez de 3,9 GB. Con RAM de sobra sale
+# a cuenta; con RAG_MEM_ARENA=0 se cambia el trato en sentido contrario.
+MEM_ARENA = os.environ.get("RAG_MEM_ARENA", "1") not in ("0", "false", "no")
 
 
 def _modelo(clave: str, construir):
@@ -362,21 +379,69 @@ def _modelo(clave: str, construir):
         with _CANDADO_MODELOS:
             if clave not in _MODELOS:
                 _MODELOS[clave] = construir()
+    _USO[clave] = time.monotonic()
     return _MODELOS[clave]
+
+
+def liberar_modelos(ttl: float = 0.0) -> list[str]:
+    """Descarga los modelos que lleven `ttl` segundos sin usarse.
+
+    Quien esté usando uno en este momento lo tiene cogido por referencia, así
+    que sacarlo del diccionario no le rompe la llamada en curso: la sesión ONNX
+    se libera cuando la suelta.
+    """
+    ahora = time.monotonic()
+    with _CANDADO_MODELOS:
+        caducados = [c for c, t in _USO.items() if ahora - t >= ttl]
+        for clave in caducados:
+            _MODELOS.pop(clave, None)
+            _USO.pop(clave, None)
+    if caducados:
+        gc.collect()
+        _devolver_memoria_al_sistema()
+    return caducados
+
+
+def _devolver_memoria_al_sistema() -> None:
+    """Pide a glibc que devuelva al sistema los bloques ya liberados.
+
+    Sin esto el proceso se queda en ~950 MB tras soltar los modelos: Python ha
+    liberado la memoria, pero el asignador la retiene para reutilizarla. Con el
+    trim baja a ~100 MB. Fuera de glibc (musl, macOS) simplemente no aplica.
+    """
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except (OSError, AttributeError):   # pragma: no cover
+        pass
+
+
+def vigilar_inactividad(ttl: float = MODEL_TTL, intervalo: float = 60.0) -> None:
+    """Arranca el hilo que va soltando los modelos que nadie usa."""
+    if ttl <= 0:
+        return
+
+    def vigilar():
+        while True:
+            time.sleep(intervalo)
+            liberar_modelos(ttl)
+
+    threading.Thread(target=vigilar, daemon=True).start()
 
 
 def embedder():
     from fastembed import TextEmbedding
 
     return _modelo("embed", lambda: TextEmbedding(
-        model_name=EMBED_MODEL, cache_dir=str(MODEL_CACHE)))
+        model_name=EMBED_MODEL, cache_dir=str(MODEL_CACHE),
+        enable_cpu_mem_arena=MEM_ARENA))
 
 
 def reranker():
     from fastembed.rerank.cross_encoder import TextCrossEncoder
 
     return _modelo("rerank", lambda: TextCrossEncoder(
-        model_name=RERANK_MODEL, cache_dir=str(MODEL_CACHE)))
+        model_name=RERANK_MODEL, cache_dir=str(MODEL_CACHE),
+        enable_cpu_mem_arena=MEM_ARENA))
 
 
 def embed_passages(texts: list[str]):

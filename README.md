@@ -59,6 +59,15 @@ cómo citar. Registro manual en otro sitio:
 claude mcp add ia-educacion -- "$PWD/.venv/bin/python" "$PWD/src/mcp_server.py"
 ```
 
+Hay un proceso del servidor por cada cliente conectado, y los dos modelos suman
+3,3 GB de RAM, así que sólo se cargan cuando llega la primera búsqueda (la
+primera tarda unos 15 s) y se sueltan tras diez minutos sin usarse: en reposo el
+proceso ocupa unos 100 MB. `RAG_MODEL_TTL` cambia esos segundos de espera; con
+`RAG_MODEL_TTL=0` los modelos se quedan cargados para siempre. Mientras
+se usa, el proceso se asienta en unos 6 GB por la memoria de trabajo que
+reserva onnxruntime; `RAG_MEM_ARENA=0` lo baja a unos 3,9 GB a cambio de
+un par de segundos más por búsqueda.
+
 ## Actualizar el corpus
 
 ```bash
