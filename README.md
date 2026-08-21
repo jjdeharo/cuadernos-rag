@@ -21,7 +21,7 @@ Su procedencia y licencia están en [FUENTES.md](FUENTES.md).
 | Índice | SQLite: `sqlite-vec` (vectorial) + FTS5 (BM25) en un único fichero |
 | Embeddings | `intfloat/multilingual-e5-large`, en local vía ONNX (sin API) |
 | Recuperación | Híbrida vectorial + BM25, fusionadas con RRF |
-| Reranking | `jina-reranker-v2-base-multilingual`, 24 candidatos → 8 |
+| Reranking | `jina-reranker-v2-base-multilingual`, 24 candidatos → 8 (máximo 12) |
 | Interfaz | Servidor MCP (Claude Code, Codex, Antigravity) y `src/ask.py` en terminal |
 
 Nada sale de tu máquina: los dos modelos corren en CPU sobre onnxruntime.
@@ -116,6 +116,20 @@ mkdir -p corpus/mi-tema/docs
 ```
 
 Con un solo corpus no hace falta indicar cuál. Con varios, sí.
+
+**Cómo se cita cada documento.** Las fuentes llegan de NotebookLM con el nombre
+del fichero por título (`guia-centros-educativos.pdf`), que en una cita dice
+poco. Para citarlas por su nombre real, añade un mapa `titulos` en el
+`corpus.json` del corpus; se aplica al mostrar, sin reindexar nada:
+
+```json
+{
+  "title": "…",
+  "titulos": {
+    "rgpd": "Reglamento (UE) 2016/679 — Reglamento General de Protección de Datos (RGPD)"
+  }
+}
+```
 
 ## Formatos admitidos
 

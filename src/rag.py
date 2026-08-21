@@ -5,12 +5,12 @@
 """Núcleo del RAG: chunking, indexado y búsqueda híbrida."""
 from __future__ import annotations
 
-import functools
 import hashlib
 import json
 import os
 import re
 import sqlite3
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -45,6 +45,10 @@ STRUCTURED_MIN_SECTIONS = 12  # a partir de aquí tratamos el doc como articulad
 # no necesita el pasaje entero, así que lo recortamos antes de puntuarlo.
 RERANK_CANDIDATES = 24
 RERANK_MAX_CHARS = 1200
+
+# Dos ventanas consecutivas comparten OVERLAP_WORDS palabras: devolver las dos
+# gasta el hueco de un pasaje distinto en repetir texto que el modelo ya tiene.
+MAX_SOLAPE = 0.10   # fracción del pasaje más corto a partir de la cual sobra
 
 # Encabezados típicos de los textos legales y guías del corpus.
 # Encabezados de textos articulados (normas europeas y españolas).
@@ -312,18 +316,34 @@ def drop_document(db: sqlite3.Connection, slug: str) -> int:
     return len(ids)
 
 
-@functools.lru_cache(maxsize=1)
+# Los modelos ocupan más de un giga cada uno y lru_cache no es atómica: sin
+# candado, precargarlos en segundo plano mientras entra una consulta cargaría
+# dos copias del mismo modelo. Doble comprobación: el candado sólo estorba
+# durante la carga inicial, no en cada búsqueda.
+_MODELOS: dict[str, object] = {}
+_CANDADO_MODELOS = threading.Lock()
+
+
+def _modelo(clave: str, construir):
+    if clave not in _MODELOS:
+        with _CANDADO_MODELOS:
+            if clave not in _MODELOS:
+                _MODELOS[clave] = construir()
+    return _MODELOS[clave]
+
+
 def embedder():
     from fastembed import TextEmbedding
 
-    return TextEmbedding(model_name=EMBED_MODEL, cache_dir=str(MODEL_CACHE))
+    return _modelo("embed", lambda: TextEmbedding(
+        model_name=EMBED_MODEL, cache_dir=str(MODEL_CACHE)))
 
 
-@functools.lru_cache(maxsize=1)
 def reranker():
     from fastembed.rerank.cross_encoder import TextCrossEncoder
 
-    return TextCrossEncoder(model_name=RERANK_MODEL, cache_dir=str(MODEL_CACHE))
+    return _modelo("rerank", lambda: TextCrossEncoder(
+        model_name=RERANK_MODEL, cache_dir=str(MODEL_CACHE)))
 
 
 def embed_passages(texts: list[str]):
@@ -339,6 +359,24 @@ def _fts_query(text: str) -> str:
     """Convierte lenguaje natural en una consulta FTS5 segura."""
     terms = re.findall(r"\w{3,}", text, flags=re.UNICODE)
     return " OR ".join(f'"{t}"' for t in terms[:32])
+
+
+def _vec_hits(db: sqlite3.Connection, query_vec, pool: int, doc: str | None):
+    """Los `pool` pasajes más cercanos al vector, opcionalmente de un documento.
+
+    El filtro por documento tiene que ir DENTRO de la consulta KNN: sqlite-vec
+    resuelve primero los k vecinos de todo el índice, así que filtrar por fuera
+    (con un JOIN) descarta casi todos los candidatos y deja la rama vectorial
+    reducida a un puñado de resultados, o a ninguno.
+    """
+    filt = " AND chunk_id IN (SELECT id FROM chunks WHERE doc_slug LIKE ?)" if doc else ""
+    arg = [f"%{doc}%"] if doc else []
+    return db.execute(
+        f"""SELECT chunk_id AS id, distance FROM chunks_vec
+            WHERE embedding MATCH ? AND k = ?{filt}
+            ORDER BY distance""",
+        [sqlite_vec.serialize_float32(query_vec), pool, *arg],
+    ).fetchall()
 
 
 def search(
@@ -357,14 +395,7 @@ def search(
         arg = [f"%{doc}%"] if doc else []
 
         pool = max(candidates * 2, 40)
-        vec = sqlite_vec.serialize_float32(embed_query(query))
-        vec_hits = db.execute(
-            f"""SELECT c.id, v.distance FROM chunks_vec v
-                JOIN chunks c ON c.id = v.chunk_id
-                WHERE v.embedding MATCH ? AND k = ?{filt}
-                ORDER BY v.distance""",
-            [vec, pool, *arg],
-        ).fetchall()
+        vec_hits = _vec_hits(db, embed_query(query), pool, doc)
 
         fts = _fts_query(query)
         bm_hits = (
@@ -409,19 +440,58 @@ def search(
             for r in results:
                 r["score"] = r["rrf"]
 
-        return results[:k]
+        return _sin_solapes(results, k)
     finally:
         if own:
             db.close()
 
 
-def format_context(results: list[dict]) -> str:
+def _sin_solapes(results: list[dict], k: int) -> list[dict]:
+    """Los k mejores pasajes sin repetir texto entre ellos.
+
+    Los resultados llegan ordenados por relevancia, así que basta con ir
+    aceptando y descartar el que solape demasiado con alguno ya aceptado: el
+    hueco que deja lo ocupa el siguiente candidato, no se pierde.
+    """
+    elegidos: list[dict] = []
+    for r in results:
+        largo = r["end_char"] - r["start_char"]
+        redundante = any(
+            e["doc_slug"] == r["doc_slug"]
+            and max(0, min(e["end_char"], r["end_char"])
+                    - max(e["start_char"], r["start_char"]))
+            > MAX_SOLAPE * min(largo, e["end_char"] - e["start_char"])
+            for e in elegidos
+        )
+        if redundante:
+            continue
+        elegidos.append(r)
+        if len(elegidos) == k:
+            break
+    return elegidos
+
+
+def titulo_legible(titulo: str, slug: str) -> str:
+    """Título de un documento tal y como se muestra en una cita.
+
+    Los cuadernos de NotebookLM traen como título el nombre del fichero
+    original ("guia-centros-educativos.pdf"), que en una cita estorba más que
+    ayuda. Los títulos de verdad se curan en corpus.json; aquí sólo se limpia
+    lo evidente.
+    """
+    limpio = re.sub(r"\.(pdf|md|txt|docx?|html?)$", "", titulo or "", flags=re.I)
+    return limpio.replace("_", " ").strip() or slug
+
+
+def format_context(results: list[dict], titulos: dict[str, str] | None = None) -> str:
     """Bloque de contexto listo para el prompt, con IDs citables."""
     parts = []
     for r in results:
         loc = f" · {r['section']}" if r["section"] else ""
+        titulo = (titulos or {}).get(r["doc_slug"]) or titulo_legible(
+            r["doc_title"], r["doc_slug"])
         parts.append(
-            f"[{r['doc_slug']}#{r['id']}] {r['doc_title']}{loc}\n{r['text']}"
+            f"[{r['doc_slug']}#{r['id']}] {titulo}{loc}\n{r['text']}"
         )
     return "\n\n---\n\n".join(parts)
 
@@ -473,6 +543,15 @@ class Corpus:
     @property
     def title(self) -> str:
         return self.meta.get("title") or self.name
+
+    @property
+    def titulos(self) -> dict[str, str]:
+        """Títulos curados por documento (slug → título), desde corpus.json.
+
+        Sirven para citar «Reglamento (UE) 2016/679 (RGPD)» en lugar del nombre
+        del fichero con el que la fuente llegó de NotebookLM.
+        """
+        return self.meta.get("titulos", {})
 
     # -- operaciones -----------------------------------------------------
     def ensure(self) -> "Corpus":

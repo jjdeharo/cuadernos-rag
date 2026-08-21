@@ -1,5 +1,22 @@
 {
   "title": "Guía sobre el uso ético, legal y responsable de la IA en educación",
   "notebook_id": "7037ce01-2663-49de-9eb6-8f26a7b4d649",
-  "n_sources": 15
+  "n_sources": 15,
+  "titulos": {
+    "rgpd": "Reglamento (UE) 2016/679 — Reglamento General de Protección de Datos (RGPD)",
+    "oj-l-202401689-es-txt": "Reglamento (UE) 2024/1689 — Reglamento de Inteligencia Artificial",
+    "lopdgdd-boe-a-2018-16673-consolidado": "Ley Orgánica 3/2018 (LOPDGDD) — Protección de Datos Personales y garantía de los derechos digitales",
+    "boe-a-1996-8930-real-decreto-legislativo-1-1996-ley-de-propiedad-intel": "Real Decreto Legislativo 1/1996 — texto refundido de la Ley de Propiedad Intelectual",
+    "gu-a-sobre-el-uso-de-la-ia-en-el-mbito-educativo-intef-2024": "Inteligencia artificial en el ámbito educativo (INTEF, 2024)",
+    "guia-centros-educativos": "Guía para centros educativos (AEPD)",
+    "calidad-datos-inteligencia-artificial": "Exactitud, idoneidad y calidad de los datos en tratamientos con IA (AEPD)",
+    "guia-basica-anonimizacion": "Guía básica de anonimización (PDPC de Singapur / AEPD, 2022)",
+    "ia-educacio": "La intel·ligència artificial en l'educació (Generalitat de Catalunya, 2024)",
+    "unesco-iite-inteligencia-artificial-y-educacion-guia-docente": "Inteligencia artificial y educación: guía para las personas a cargo de formular políticas (UNESCO, 2021)",
+    "unesco-recomendacion-sobre-la-etica-de-la-inteligencia-artificial-2021": "Recomendación sobre la ética de la inteligencia artificial (UNESCO, 2022)",
+    "marco-competencias-docentes-ia": "Marco de competencias para docentes en materia de IA (UNESCO, 2025)",
+    "digcomp-3-0-kj0125521enn": "DigComp 3.0: European Digital Competence Framework (JRC, 2025)",
+    "ailf-en": "Empowering Learners for the Age of AI: An AI Literacy Framework (OCDE / Comisión Europea, 2026)",
+    "prompt": "Instrucciones del agente de apoyo al profesorado (material propio)"
+  }
 }

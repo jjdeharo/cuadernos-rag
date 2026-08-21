@@ -7,7 +7,10 @@
 Registro en Claude Code:
     claude mcp add ia-educacion -- /ruta/al/proyecto/.venv/bin/python /ruta/src/mcp_server.py
 """
+import functools
+import sqlite3
 import sys
+import threading
 from pathlib import Path
 from typing import Annotated
 
@@ -42,9 +45,42 @@ Cómo responder preguntas sobre este material:
 mcp = MCPServer("ia-educacion", version="1.0.0", instructions=INSTRUCCIONES)
 
 
+def responde_al_fallo(fn):
+    """Convierte los fallos previsibles en respuestas de texto.
+
+    Que no haya índice o que el nombre del corpus no exista no es una avería
+    del servidor: es algo que el modelo puede corregir en la llamada siguiente
+    si se lo contamos, mientras que un error de herramienta sólo lo bloquea.
+    """
+    @functools.wraps(fn)
+    def envuelta(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except ValueError as e:
+            return str(e)
+
+    return envuelta
+
+
+def corpus_indexado(nombre: str | None) -> rag.Corpus:
+    """Resuelve un corpus y comprueba que tenga un índice utilizable."""
+    elegido = rag.resolve_corpus(nombre)
+    try:
+        pasajes = elegido.stats()["chunks"] if elegido.indexed() else 0
+    except sqlite3.OperationalError:
+        pasajes = 0   # base a medio crear: para el caso, como si no hubiera
+    if not pasajes:
+        raise ValueError(
+            f"El corpus '{elegido.name}' no está indexado. Créalo con:"
+            f" python src/index.py --corpus {elegido.name}"
+        )
+    return elegido
+
+
 @mcp.tool()
+@responde_al_fallo
 def buscar(consulta: str,
-           k: Annotated[int, Field(ge=1, le=24)] = 8,
+           k: Annotated[int, Field(ge=1, le=12)] = 8,
            documento: str | None = None,
            corpus: str | None = None) -> str:
     """Busca pasajes relevantes en el corpus sobre uso ético, legal y responsable
@@ -56,14 +92,15 @@ def buscar(consulta: str,
 
     Args:
         consulta: pregunta o descripción de lo que buscas, en lenguaje natural.
-        k: número de pasajes a devolver (por defecto 8).
+        k: número de pasajes a devolver (por defecto 8, máximo 12).
         documento: opcional, restringe la búsqueda a un documento por su slug.
         corpus: opcional, nombre de otro corpus (ver `listar_corpus`).
     """
-    res = rag.resolve_corpus(corpus).search(consulta, k=k, doc=documento)
+    elegido = corpus_indexado(corpus)
+    res = elegido.search(consulta, k=k, doc=documento)
     if not res:
         return "Sin resultados. Prueba otra formulación o términos más generales."
-    return rag.format_context(res)
+    return rag.format_context(res, elegido.titulos)
 
 
 @mcp.tool()
@@ -79,13 +116,14 @@ def listar_corpus() -> str:
 
 
 @mcp.tool()
+@responde_al_fallo
 def listar_fuentes(corpus: str | None = None) -> str:
     """Lista los documentos de un corpus con su slug y su tamaño en pasajes.
 
     Args:
         corpus: opcional, nombre del corpus (ver `listar_corpus`).
     """
-    elegido = rag.resolve_corpus(corpus)
+    elegido = corpus_indexado(corpus)
     s = elegido.stats()
     lineas = [f"{s['chunks']} pasajes en {len(s['docs'])} documentos:", ""]
     for d in s["docs"]:
@@ -94,6 +132,7 @@ def listar_fuentes(corpus: str | None = None) -> str:
 
 
 @mcp.tool()
+@responde_al_fallo
 def leer_pasaje(chunk_id: Annotated[int, Field(ge=1)],
                 contexto: Annotated[int, Field(ge=0, le=20)] = 1,
                 corpus: str | None = None) -> str:
@@ -107,7 +146,8 @@ def leer_pasaje(chunk_id: Annotated[int, Field(ge=1)],
         contexto: cuántos pasajes vecinos incluir a cada lado (por defecto 1).
         corpus: opcional, nombre del corpus en el que buscar el pasaje.
     """
-    db = rag.resolve_corpus(corpus).connect()
+    elegido = corpus_indexado(corpus)
+    db = elegido.connect()
     try:
         row = db.execute("SELECT * FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
         if not row:
@@ -123,12 +163,13 @@ def leer_pasaje(chunk_id: Annotated[int, Field(ge=1)],
             (row["doc_slug"], chunk_id, contexto),
         ).fetchall()
         vecinos = [*reversed(anteriores), row, *posteriores]
-        return rag.format_context([dict(v) for v in vecinos])
+        return rag.format_context([dict(v) for v in vecinos], elegido.titulos)
     finally:
         db.close()
 
 
 @mcp.tool()
+@responde_al_fallo
 def leer_documento(
     slug: str,
     desde: Annotated[int, Field(ge=0)] = 0,
@@ -164,5 +205,23 @@ def leer_documento(
     return f"# {ruta.stem} (caracteres {desde}-{fin})\n\n{trozo}{cola}"
 
 
+def precargar_modelos() -> None:
+    """Carga los dos modelos en cuanto arranca el servidor, en segundo plano.
+
+    Cargarlos cuesta unos 15 segundos y, si se espera a la primera búsqueda,
+    esos segundos se los come esa llamada. Hacerlo aquí no bloquea el
+    handshake: cuando llegue la primera consulta lo normal es que ya estén.
+    """
+    def cargar():
+        try:
+            rag.embedder()
+            rag.reranker()
+        except Exception as e:                      # pragma: no cover
+            print(f"No se pudieron precargar los modelos: {e}", file=sys.stderr)
+
+    threading.Thread(target=cargar, daemon=True).start()
+
+
 if __name__ == "__main__":
+    precargar_modelos()
     mcp.run()
