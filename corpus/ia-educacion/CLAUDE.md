@@ -7,10 +7,14 @@ UNESCO, marcos de competencia digital) indexada para consulta con RAG.
 
 Usa las herramientas del servidor MCP `ia-educacion`:
 
-- `buscar(consulta, k, documento)` — búsqueda híbrida sobre el corpus.
-- `listar_fuentes()` — inventario de documentos y sus slugs.
-- `leer_pasaje(chunk_id)` — amplía el contexto de un pasaje concreto.
-- `leer_documento(slug, desde, longitud)` — recorre un documento entero.
+- `buscar(consulta, k, documento, corpus)` — búsqueda híbrida sobre un corpus.
+- `listar_fuentes(corpus)` — inventario de documentos y sus slugs.
+- `leer_pasaje(chunk_id, contexto, corpus)` — amplía un pasaje concreto.
+- `leer_documento(slug, desde, longitud, corpus)` — recorre un documento entero.
+
+El parámetro `corpus` es opcional cuando solo hay uno disponible. Si hay
+varios, usa primero `listar_corpus()` y pasa el mismo corpus a todas las
+herramientas de una consulta.
 
 Reglas:
 

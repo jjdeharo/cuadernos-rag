@@ -9,10 +9,12 @@ Registro en Claude Code:
 """
 import sys
 from pathlib import Path
+from typing import Annotated
 
 sys.path.insert(0, str(Path(__file__).parent))
 import rag
 from mcp.server import MCPServer
+from pydantic import Field
 
 # Estas instrucciones viajan con el servidor: las recibe cualquier cliente al
 # conectarse (Claude Code, Codex, Antigravity…). Es la diferencia entre dar
@@ -37,11 +39,13 @@ Cómo responder preguntas sobre este material:
 5. Si el corpus no cubre la pregunta, dilo en lugar de rellenar el hueco.
 """
 
-mcp = MCPServer("ia-educacion", instructions=INSTRUCCIONES)
+mcp = MCPServer("ia-educacion", version="1.0.0", instructions=INSTRUCCIONES)
 
 
 @mcp.tool()
-def buscar(consulta: str, k: int = 8, documento: str | None = None,
+def buscar(consulta: str,
+           k: Annotated[int, Field(ge=1, le=24)] = 8,
+           documento: str | None = None,
            corpus: str | None = None) -> str:
     """Busca pasajes relevantes en el corpus sobre uso ético, legal y responsable
     de la IA en educación (RGPD, LOPDGDD, Reglamento europeo de IA, propiedad
@@ -75,9 +79,14 @@ def listar_corpus() -> str:
 
 
 @mcp.tool()
-def listar_fuentes() -> str:
-    """Lista los documentos del corpus con su slug y su tamaño en pasajes."""
-    s = rag.stats()
+def listar_fuentes(corpus: str | None = None) -> str:
+    """Lista los documentos de un corpus con su slug y su tamaño en pasajes.
+
+    Args:
+        corpus: opcional, nombre del corpus (ver `listar_corpus`).
+    """
+    elegido = rag.resolve_corpus(corpus)
+    s = elegido.stats()
     lineas = [f"{s['chunks']} pasajes en {len(s['docs'])} documentos:", ""]
     for d in s["docs"]:
         lineas.append(f"- {d['doc_slug']}  ({d['n']} pasajes) — {d['doc_title']}")
@@ -85,7 +94,9 @@ def listar_fuentes() -> str:
 
 
 @mcp.tool()
-def leer_pasaje(chunk_id: int, contexto: int = 1) -> str:
+def leer_pasaje(chunk_id: Annotated[int, Field(ge=1)],
+                contexto: Annotated[int, Field(ge=0, le=20)] = 1,
+                corpus: str | None = None) -> str:
     """Lee un pasaje concreto por su id, junto con los pasajes contiguos.
 
     Úsalo cuando un resultado de `buscar` aparece cortado y necesitas el texto
@@ -94,24 +105,36 @@ def leer_pasaje(chunk_id: int, contexto: int = 1) -> str:
     Args:
         chunk_id: el número que aparece tras `#` en el identificador del pasaje.
         contexto: cuántos pasajes vecinos incluir a cada lado (por defecto 1).
+        corpus: opcional, nombre del corpus en el que buscar el pasaje.
     """
-    db = rag.connect()
+    db = rag.resolve_corpus(corpus).connect()
     try:
         row = db.execute("SELECT * FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
         if not row:
             return f"No existe el pasaje {chunk_id}."
-        vecinos = db.execute(
-            "SELECT * FROM chunks WHERE doc_slug = ? AND id BETWEEN ? AND ?"
-            " ORDER BY id",
-            (row["doc_slug"], chunk_id - contexto, chunk_id + contexto),
+        anteriores = db.execute(
+            "SELECT * FROM chunks WHERE doc_slug = ? AND id < ?"
+            " ORDER BY id DESC LIMIT ?",
+            (row["doc_slug"], chunk_id, contexto),
         ).fetchall()
+        posteriores = db.execute(
+            "SELECT * FROM chunks WHERE doc_slug = ? AND id > ?"
+            " ORDER BY id LIMIT ?",
+            (row["doc_slug"], chunk_id, contexto),
+        ).fetchall()
+        vecinos = [*reversed(anteriores), row, *posteriores]
         return rag.format_context([dict(v) for v in vecinos])
     finally:
         db.close()
 
 
 @mcp.tool()
-def leer_documento(slug: str, desde: int = 0, longitud: int = 20000) -> str:
+def leer_documento(
+    slug: str,
+    desde: Annotated[int, Field(ge=0)] = 0,
+    longitud: Annotated[int, Field(ge=1, le=60000)] = 20000,
+    corpus: str | None = None,
+) -> str:
     """Lee un documento completo del corpus por tramos de caracteres.
 
     Úsalo cuando necesites recorrer un texto entero (por ejemplo, para localizar
@@ -121,15 +144,20 @@ def leer_documento(slug: str, desde: int = 0, longitud: int = 20000) -> str:
         slug: identificador del documento (ver `listar_fuentes`).
         desde: posición inicial en caracteres.
         longitud: cuántos caracteres devolver (máximo 60000).
+        corpus: opcional, nombre del corpus que contiene el documento.
     """
-    ruta = rag.DOCS / f"{slug}.md"
-    if not ruta.exists():
-        coincidencias = [p.stem for p in rag.DOCS.glob(f"*{slug}*.md")]
+    docs = rag.resolve_corpus(corpus).docs
+    documentos = list(docs.glob("*.md"))
+    exactas = [p for p in documentos if p.stem == slug]
+    if exactas:
+        ruta = exactas[0]
+    else:
+        coincidencias = [p for p in documentos if slug.lower() in p.stem.lower()]
         if len(coincidencias) != 1:
-            return f"No encuentro '{slug}'. Candidatos: {coincidencias or 'ninguno'}"
-        ruta = rag.DOCS / f"{coincidencias[0]}.md"
+            nombres = [p.stem for p in coincidencias]
+            return f"No encuentro '{slug}'. Candidatos: {nombres or 'ninguno'}"
+        ruta = coincidencias[0]
     _, cuerpo = rag.parse_doc(ruta)
-    longitud = min(longitud, 60000)
     trozo = cuerpo[desde : desde + longitud]
     fin = desde + len(trozo)
     cola = f"\n\n[…continúa en {fin} de {len(cuerpo)} caracteres]" if fin < len(cuerpo) else ""
